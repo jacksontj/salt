@@ -259,8 +259,7 @@ class IPCMessageClient(IPCClient):
         Sockets and filehandles should be closed explicitely, to prevent
         leaks.
         '''
-        if hasattr(self, 'stream'):
-            self.close()
+        self.close()
 
 
 class IPCMessageServer(IPCServer):
