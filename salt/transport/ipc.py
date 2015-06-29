@@ -229,8 +229,6 @@ class IPCMessageClient(IPCClient):
         '''
         Create an IPCMessageClient
         '''
-        super(IPCMessageClient, self).__init__(io_loop=io_loop, socket_path=socket_path)
-        self.io_loop = io_loop or tornado.ioloop.IOLoop.current()
         self.socket_path = socket_path
 
     # FIXME timeout unimplemented
