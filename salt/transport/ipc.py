@@ -81,11 +81,14 @@ class IPCServer(object):
         for additional details.
         '''
         while True:
-            framed_msg_len = yield stream.read_until(' ')
-            framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
-            framed_msg = msgpack.loads(framed_msg_raw)
-            body = framed_msg['body']
-            self.io_loop.spawn_callback(self.stream_handler, body)
+            try:
+                framed_msg_len = yield stream.read_until(' ')
+                framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
+                framed_msg = msgpack.loads(framed_msg_raw)
+                body = framed_msg['body']
+                self.io_loop.spawn_callback(self.stream_handler, body)
+            except Exception as exc:
+                log.error('Exception occurred while handling stream: {0}'.format(exc))
 
     def handle_connection(self, connection, address):
         log.trace('IPCServer: Handling connection to address: {0}'.format(address))
