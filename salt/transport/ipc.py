@@ -129,7 +129,7 @@ class IPCClient(object):
     # Create singleton map between two sockets
     instance_map = weakref.WeakKeyDictionary()
 
-    def __new__(cls, io_loop=None, socket_path=None):
+    def __new__(cls, opts, io_loop=None, socket_path=None):
         io_loop = io_loop or tornado.ioloop.IOLoop.current()
         if io_loop not in IPCClient.instance_map:
             IPCClient.instance_map[io_loop] = weakref.WeakValueDictionary()
@@ -143,6 +143,7 @@ class IPCClient(object):
             new_client = object.__new__(cls)
             # FIXME
             new_client.__singleton_init__(io_loop=io_loop, socket_path=socket_path)
+            new_client.connect()  # Just go ahead and connect here so we're ready
             loop_instance_map[key] = new_client
         else:
             log.debug('Re-using IPCClient for {0}'.format(key))
@@ -235,8 +236,9 @@ class IPCMessageClient(IPCClient):
         self.socket_path = socket_path
 
     # FIXME timeout unimplemented
+    # FIXME tries unimplemented
     @tornado.gen.coroutine
-    def send(self, msg, timeout=None):
+    def send(self, msg, timeout=None, tries=None):
         '''
         Send a message to an IPC socket
 
