@@ -82,11 +82,12 @@ class IPCServer(object):
         '''
         while True:
             try:
-                framed_msg_len = yield stream.read_until(' ')
-                framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
-                framed_msg = msgpack.loads(framed_msg_raw)
-                body = framed_msg['body']
-                self.io_loop.spawn_callback(self.stream_handler, body)
+                if not stream.reading():
+                    framed_msg_len = yield stream.read_until(' ')
+                    framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
+                    framed_msg = msgpack.loads(framed_msg_raw)
+                    body = framed_msg['body']
+                    self.io_loop.spawn_callback(self.stream_handler, body)
             except Exception as exc:
                 log.error('Exception occurred while handling stream: {0}'.format(exc))
 
@@ -129,7 +130,7 @@ class IPCClient(object):
     # Create singleton map between two sockets
     instance_map = weakref.WeakKeyDictionary()
 
-    def __new__(cls, opts, io_loop=None, socket_path=None):
+    def __new__(cls, opts, socket_path, io_loop=None):
         io_loop = io_loop or tornado.ioloop.IOLoop.current()
         if io_loop not in IPCClient.instance_map:
             IPCClient.instance_map[io_loop] = weakref.WeakValueDictionary()
@@ -149,7 +150,7 @@ class IPCClient(object):
             log.debug('Re-using IPCClient for {0}'.format(key))
         return loop_instance_map[key]
 
-    def __singleton_init__(self, io_loop=None, socket_path=None):
+    def __singleton_init__(self, socket_path, io_loop=None):
         '''
         Create a new IPC client
 
@@ -162,7 +163,7 @@ class IPCClient(object):
         self.io_loop = io_loop or tornado.ioloop.IOLoop.current()
         self.socket_path = socket_path
 
-    def __init__(self, io_loop=None, socket_path=None):
+    def __init__(self, socket_path, io_loop=None):
         # Handled by singleton __new__
         pass
 
@@ -181,7 +182,7 @@ class IPCClient(object):
             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM),
             io_loop=self.io_loop,
         )
-        yield self.stream.connect(socket_path)
+        self.stream.connect(socket_path)
         log.trace('IPCClient: Connecting to socket: {0}'.format(socket_path))
 
     def __del__(self):
@@ -228,7 +229,7 @@ class IPCMessageClient(IPCClient):
     '''
     def __init__(self,
                  opts,
-                 socket_path=None,
+                 socket_path,
                  io_loop=None):
         '''
         Create an IPCMessageClient
