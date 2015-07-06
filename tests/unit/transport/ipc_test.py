@@ -1,30 +1,37 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: :email:`Thomas Jackson <jacksontj.89@gmail.com>`
+    :codeauthor: :email:`Mike Place <mp@saltstack.com>`
 '''
 
 # Import python libs
 from __future__ import absolute_import
 import os
-import threading
 import time
+import logging
+import threading
 
 import tornado.gen
 import tornado.ioloop
 
-import salt.config
 import salt.utils
+import salt.config
+import salt.exceptions
+import salt.transport.ipc
 import salt.transport.server
 import salt.transport.client
-import salt.transport.ipc
-import salt.exceptions
+
+from salt.ext.six.moves import range
 
 # Import Salt Testing libs
-from salt.ext.six.moves import range
-from salttesting import TestCase
-from salttesting.helpers import ensure_in_syspath
-ensure_in_syspath('../')
 import integration
+
+from salttesting import TestCase
+from salttesting.mock import MagicMock
+from salttesting.helpers import ensure_in_syspath
+
+log = logging.getLogger(__name__)
+
+ensure_in_syspath('../')
 
 
 # TODO: move to a library?
@@ -72,34 +79,52 @@ class ClearReqTestCases(BaseIPCReqCase):
     Test all of the clear msg stuff
     '''
     def setUp(self):
-        self.channel = salt.transport.ipc.IPCMessageClient(self.master_opts, socket_path=self.socket_path)
+        self.channel = salt.transport.ipc.IPCMessageClient(self.master_opts, socket_path=self.socket_path, io_loop=tornado.ioloop.IOLoop.instance())
 
     def tearDown(self):
         self.results = []
+        self.server_channel.stream_handler = lambda reset_handler: None
 
     def test_basic_send(self):
+        def server_stream_handler(payload):
+            self.assertIn('test_basic_send', payload)
+            tornado.ioloop.IOLoop.instance().stop()
+        self.server_channel.stream_handler = server_stream_handler
         self.channel.send('test_basic_send')
-        time.sleep(0.1)
-        self.assertIn('test_basic_send', self.results)
+        tornado.ioloop.IOLoop.instance().start()
 
     def test_many_send(self):
         msgs = []
+        self.server_channel.stream_handler = MagicMock()
+
         for i in range(0, 1000):
             msgs.append('test_many_send_{0}'.format(i))
 
         for i in msgs:
             self.channel.send(i)
-        time.sleep(0.5)
-        self.assertTrue(set(self.results).issuperset(msgs))
+        # Because we're doing multiple sends here, we can't wait on a single callback
+        # This is a little hacky, but works
+        five_sec_timeout = time.time() + 5.0
+        while self.channel.stream.writing():
+            time.sleep(0.1)
+            if time.time() > five_sec_timeout:
+                break
+        self.assertEqual(len(self.server_channel.stream_handler.mock_calls), len(msgs))
 
     def test_very_big_message(self):
+        def server_stream_handler(payload):
+            self.assertEqual(payload, long_str)
+            tornado.ioloop.IOLoop.instance().stop()
+
+        self.server_channel.stream_handler = server_stream_handler
+
         long_str = ''.join([str(num) for num in range(10**5)])
         self.channel.send(long_str)
-        time.sleep(1)
-        self.assertIn(long_str, self.results)
+        tornado.ioloop.IOLoop.instance().start()
 
     @classmethod
     def _handle_payload(cls, payload):
+        log.warning('Using class payload handler. Override for test-specific instances.')
         cls.results.append(payload)
 
 
