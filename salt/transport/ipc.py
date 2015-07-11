@@ -227,15 +227,6 @@ class IPCMessageClient(IPCClient):
     # Send some data
     ipc_client.send('Hello world')
     '''
-    def __init__(self,
-                 opts,
-                 socket_path,
-                 io_loop=None):
-        '''
-        Create an IPCMessageClient
-        '''
-        self.socket_path = socket_path
-
     # FIXME timeout unimplemented
     # FIXME tries unimplemented
     @tornado.gen.coroutine
