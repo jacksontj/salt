@@ -244,18 +244,6 @@ class IPCMessageClient(IPCClient):
         pack = salt.transport.frame.frame_msg(msg, raw_body=True)
         yield self.stream.write(pack)
 
-    def close(self):
-        if hasattr(self, 'stream'):
-            self.stream.close()
-
-    def __del__(self):
-        '''
-        Routines to handle any cleanup before the instance shuts down.
-        Sockets and filehandles should be closed explicitely, to prevent
-        leaks.
-        '''
-        self.close()
-
 
 class IPCMessageServer(IPCServer):
     '''
@@ -318,10 +306,3 @@ class IPCMessageServer(IPCServer):
         '''
         self.payload_handler = payload_handler
         self.io_loop = io_loop
-
-    # TODO: don't stop the IOloop... this should stop this messageSrever from running
-    def close(self):
-        '''
-        Shutdown the message server
-        '''
-        self.io_loop.stop()
