@@ -14,6 +14,7 @@ import weakref
 import tornado
 import tornado.gen
 import tornado.netutil
+import tornado.concurrent
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 
@@ -29,7 +30,7 @@ class IPCServer(object):
     A Tornado IPC server very similar to Tornado's TCPServer class
     but using either UNIX domain sockets or TCP sockets
     '''
-    def __init__(self, opts, io_loop=None, stream_handler=None):
+    def __init__(self, socket_path, io_loop=None, payload_handler=None):
         '''
         Create a new Tornado IPC server
 
@@ -37,16 +38,16 @@ class IPCServer(object):
         :param func stream_handler: A function to customize handling of an
                                     incoming stream.
         '''
-        self.opts = opts
+        self.socket_path = socket_path
         self._started = False
-        self.stream_handler = stream_handler
+        self.payload_handler = payload_handler
 
         # Placeholders for attributes to be populated by method calls
         self.stream = None
         self.sock = None
-        self.io_loop = None
+        self.io_loop = io_loop or IOLoop.current()
 
-    def start(self, socket_path):
+    def start(self):
         '''
         Perform the work necessary to start up a Tornado IPC server
 
@@ -57,11 +58,8 @@ class IPCServer(object):
                                 this method, but parent directories should.
         '''
         # Start up the ioloop
-        log.trace('IPCServer: binding to socket: {0}'.format(socket_path))
-        self.sock = tornado.netutil.bind_unix_socket(socket_path)
-
-        if self.io_loop is None:
-            self.io_loop = IOLoop.current()
+        log.trace('IPCServer: binding to socket: {0}'.format(self.socket_path))
+        self.sock = tornado.netutil.bind_unix_socket(self.socket_path)
 
         tornado.netutil.add_accept_handler(
             self.sock,
@@ -80,28 +78,28 @@ class IPCServer(object):
         See http://tornado.readthedocs.org/en/latest/iostream.html#tornado.iostream.IOStream
         for additional details.
         '''
-        while True:
+        while not stream.closed():
             try:
-                if not stream.reading():
-                    framed_msg_len = yield stream.read_until(' ')
-                    framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
-                    framed_msg = msgpack.loads(framed_msg_raw)
-                    body = framed_msg['body']
-                    self.io_loop.spawn_callback(self.stream_handler, body)
+                framed_msg_len = yield stream.read_until(' ')
+                framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
+                framed_msg = msgpack.loads(framed_msg_raw)
+                body = framed_msg['body']
+                self.io_loop.spawn_callback(self.payload_handler, body)
             except Exception as exc:
                 log.error('Exception occurred while handling stream: {0}'.format(exc))
 
     def handle_connection(self, connection, address):
         log.trace('IPCServer: Handling connection to address: {0}'.format(address))
         try:
-            stream = IOStream(connection,
-                              io_loop=self.io_loop,
-                              )
+            stream = IOStream(
+                connection,
+                io_loop=self.io_loop,
+            )
             self.io_loop.spawn_callback(self.handle_stream, stream)
         except Exception as exc:
             log.error('IPC streaming error: {0}'.format(exc))
 
-    def __del__(self):
+    def close(self):
         '''
         Routines to handle any cleanup before the instance shuts down.
         Sockets and filehandles should be closed explicitely, to prevent
@@ -111,6 +109,10 @@ class IPCServer(object):
             self.stream.close()
         if hasattr(self.sock, 'close'):
             self.sock.close()
+
+    def __del__(self):
+        self.close()
+
 
 
 class IPCClient(object):
@@ -130,7 +132,7 @@ class IPCClient(object):
     # Create singleton map between two sockets
     instance_map = weakref.WeakKeyDictionary()
 
-    def __new__(cls, opts, socket_path, io_loop=None):
+    def __new__(cls, socket_path, io_loop=None):
         io_loop = io_loop or tornado.ioloop.IOLoop.current()
         if io_loop not in IPCClient.instance_map:
             IPCClient.instance_map[io_loop] = weakref.WeakValueDictionary()
@@ -144,7 +146,6 @@ class IPCClient(object):
             new_client = object.__new__(cls)
             # FIXME
             new_client.__singleton_init__(io_loop=io_loop, socket_path=socket_path)
-            new_client.connect()  # Just go ahead and connect here so we're ready
             loop_instance_map[key] = new_client
         else:
             log.debug('Re-using IPCClient for {0}'.format(key))
@@ -167,25 +168,46 @@ class IPCClient(object):
         # Handled by singleton __new__
         pass
 
+    def connected(self):
+        return hasattr(self, 'stream')
+
+    def connect(self, callback=None):
+        '''
+        Connect to the IPC socket
+        '''
+        if hasattr(self, '_connecting_future') and not self._connecting_future.done():
+            future = self._connecting_future
+        else:
+            future = tornado.concurrent.Future()
+            self._connecting_future = future
+            self.io_loop.add_callback(self._connect)
+
+        if callback is not None:
+            def handle_future(future):
+                response = future.result()
+                self.io_loop.add_callback(callback, response)
+            future.add_done_callback(handle_future)
+        return future
+
+
     # TODO: single connect for multiple callers (similar to auth)
     @tornado.gen.coroutine
-    def connect(self, socket_path=None):
+    def _connect(self):
         '''
-        Connect to a running IPCServer on a socket
-
-        :param str socket_path: The path to a socket on a filesystem where a
-                                IPServer is bound
+        Connect to a running IPCServer
         '''
-        if not socket_path:
-            socket_path = self.socket_path
         self.stream = IOStream(
             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM),
             io_loop=self.io_loop,
         )
-        self.stream.connect(socket_path)
-        log.trace('IPCClient: Connecting to socket: {0}'.format(socket_path))
+        yield self.stream.connect(self.socket_path)
+        log.trace('IPCClient: Connecting to socket: {0}'.format(self.socket_path))
+        self._connecting_future.set_result(True)
 
     def __del__(self):
+        self.close()
+
+    def close(self):
         '''
         Routines to handle any cleanup before the instance shuts down.
         Sockets and filehandles should be closed explicitely, to prevent
@@ -213,16 +235,14 @@ class IPCMessageClient(IPCClient):
     import salt.config
     import salt.transport.ipc
 
-    opts = salt.config.master_config()
-
     io_loop = tornado.ioloop.IOLoop.current()
 
     ipc_server_socket_path = '/var/run/ipc_server.ipc'
 
-    ipc_client = salt.transport.ipc.IPCMessageClient(opts, io_loop=io_loop)
+    ipc_client = salt.transport.ipc.IPCMessageClient(ipc_server_socket_path, io_loop=io_loop)
 
     # Connect to the server
-    ipc_client.connect(ipc_server_socket_path)
+    ipc_client.connect()
 
     # Send some data
     ipc_client.send('Hello world')
@@ -239,7 +259,7 @@ class IPCMessageClient(IPCClient):
         :param dict msg: The message to be sent
         :param int timeout: Timeout when sending message (Currently unimplemented)
         '''
-        if not hasattr(self, 'stream'):
+        if not self.connected():
             yield self.connect()
         pack = salt.transport.frame.frame_msg(msg, raw_body=True)
         yield self.stream.write(pack)
@@ -280,29 +300,3 @@ class IPCMessageServer(IPCServer):
 
     See IPCMessageClient() for an example of sending messages to an IPCMessageServer instance
     '''
-    def __init__(self, opts, socket_path=None, io_loop=None, stream_handler=None):
-        '''
-        Create an IPCMessageServer
-
-        :param dict opts:           Salt options dictionary
-        :param str socket_path:     Path on the filesystem to use for the IPC socket
-        :param IOLoop io_loop:      Tornado IOLoop instance
-        :param func stream_handler: Function to callback on message receipt
-        '''
-        super(IPCMessageServer, self).__init__(opts, io_loop=io_loop, stream_handler=stream_handler)
-        self.io_loop = io_loop or tornado.ioloop.IOLoop.current()
-        self.socket_path = socket_path
-        self.stream_handler = stream_handler
-
-    def pre_fork(self, process_manager):
-        '''
-        Do any work which is necessary prior to forking, such as setting up sockets
-        '''
-        self.start(self.socket_path)
-
-    def post_fork(self, payload_handler, io_loop):
-        '''
-        Do any work which shoud happen per-process, such as spinning up event loops
-        '''
-        self.payload_handler = payload_handler
-        self.io_loop = io_loop

@@ -570,9 +570,9 @@ class PubServer(tornado.tcpserver.TCPServer, object):
         self.clients.append((stream, address))
 
     @tornado.gen.coroutine
-    def publish_payload(self, package):
-        payload = salt.transport.frame.frame_msg(salt.payload.unpackage(package)['payload'], raw_body=True)
-        log.trace('TCP PubServer sending payload: {0}'.format(payload))
+    def publish_payload(self, payload):
+        payload = salt.transport.frame.frame_msg(payload['payload'], raw_body=True)
+        log.debug('TCP PubServer sending payload: {0}'.format(payload))
         to_remove = []
         for item in self.clients:
             client, address = item
@@ -609,16 +609,16 @@ class TCPPubServerChannel(salt.transport.server.PubServerChannel):
         # Set up Salt IPC server
         pull_uri = os.path.join(self.opts['sock_dir'], 'publish_pull.ipc')
         pull_sock = salt.transport.ipc.IPCMessageServer(
-            self.opts,
+            pull_uri,
             io_loop=self.io_loop,
-            stream_handler=pub_server.publish_payload,
+            payload_handler=pub_server.publish_payload,
         )
 
         # Securely create socket
         log.info('Starting the Salt Puller on {0}'.format(pull_uri))
         old_umask = os.umask(0o177)
         try:
-            pull_sock.start(pull_uri)
+            pull_sock.start()
         finally:
             os.umask(old_umask)
 
@@ -649,8 +649,11 @@ class TCPPubServerChannel(salt.transport.server.PubServerChannel):
         pull_uri = os.path.join(self.opts['sock_dir'], 'publish_pull.ipc')
         # TODO: switch to the actual async interface
         #pub_sock = salt.transport.ipc.IPCMessageClient(self.opts, io_loop=self.io_loop)
-        pub_sock = salt.utils.async.SyncWrapper(salt.transport.ipc.IPCMessageClient, (self.opts, os.path.join(self.opts['sock_dir'], 'publish.ipc')))
-        pub_sock.connect(pull_uri)
+        pub_sock = salt.utils.async.SyncWrapper(
+            salt.transport.ipc.IPCMessageClient,
+            (pull_uri,)
+        )
+        pub_sock.connect()
 
         int_payload = {'payload': self.serial.dumps(payload)}
 
@@ -658,4 +661,4 @@ class TCPPubServerChannel(salt.transport.server.PubServerChannel):
         if load['tgt_type'] == 'list':
             int_payload['topic_lst'] = load['tgt']
         # Send it over IPC!
-        pub_sock.send(self.serial.dumps(int_payload))
+        pub_sock.send(int_payload)
