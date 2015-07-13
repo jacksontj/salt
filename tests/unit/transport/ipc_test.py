@@ -70,7 +70,7 @@ class BaseIPCReqCase(tornado.testing.AsyncTestCase):
         if isinstance(payload, dict) and payload.get('stop'):
             self.stop()
 
-class ClearReqTestCases(BaseIPCReqCase):
+class IPCMessageClient(BaseIPCReqCase):
     '''
     Test all of the clear msg stuff
     '''
@@ -85,11 +85,11 @@ class ClearReqTestCases(BaseIPCReqCase):
         return channel
 
     def setUp(self):
-        super(ClearReqTestCases, self).setUp()
+        super(IPCMessageClient, self).setUp()
         self.channel = self._get_channel()
 
     def tearDown(self):
-        super(ClearReqTestCases, self).setUp()
+        super(IPCMessageClient, self).setUp()
         self.channel.close()
 
     def test_basic_send(self):

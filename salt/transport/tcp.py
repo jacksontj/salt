@@ -366,6 +366,8 @@ class SaltMessageServer(tornado.tcpserver.TCPServer, object):
             self.clients.remove(item)
 
 
+# TODO consolidate with IPCClient
+# TODO: limit in-flight messages.
 # TODO: singleton? Something to not re-create the tcp connection so much
 class SaltMessageClient(object):
     '''
