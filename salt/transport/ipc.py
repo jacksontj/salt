@@ -78,13 +78,30 @@ class IPCServer(object):
         See http://tornado.readthedocs.org/en/latest/iostream.html#tornado.iostream.IOStream
         for additional details.
         '''
+        @tornado.gen.coroutine
+        def _null(msg):
+            raise tornado.gen.Return(None)
+
+        def write_callback(stream, header):
+            if header.get('mid'):
+                @tornado.gen.coroutine
+                def return_message(msg):
+                    pack = salt.transport.frame.frame_msg(
+                        msg,
+                        header={'mid': header['mid']},
+                        raw_body=True,
+                    )
+                    yield stream.write(pack)
+                return return_message
+            else:
+                return _null
         while not stream.closed():
             try:
                 framed_msg_len = yield stream.read_until(' ')
                 framed_msg_raw = yield stream.read_bytes(int(framed_msg_len.strip()))
                 framed_msg = msgpack.loads(framed_msg_raw)
                 body = framed_msg['body']
-                self.io_loop.spawn_callback(self.payload_handler, body)
+                self.io_loop.spawn_callback(self.payload_handler, body, write_callback(stream, framed_msg['head']))
             except Exception as exc:
                 log.error('Exception occurred while handling stream: {0}'.format(exc))
 
@@ -160,9 +177,9 @@ class IPCClient(object):
         to the server.
 
         '''
-
         self.io_loop = io_loop or tornado.ioloop.IOLoop.current()
         self.socket_path = socket_path
+        self._closing = False
 
     def __init__(self, socket_path, io_loop=None):
         # Handled by singleton __new__
@@ -199,9 +216,17 @@ class IPCClient(object):
             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM),
             io_loop=self.io_loop,
         )
-        yield self.stream.connect(self.socket_path)
-        log.trace('IPCClient: Connecting to socket: {0}'.format(self.socket_path))
-        self._connecting_future.set_result(True)
+        while True:
+            if self._closing:
+                break
+            try:
+                log.trace('IPCClient: Connecting to socket: {0}'.format(self.socket_path))
+                yield self.stream.connect(self.socket_path)
+                self._connecting_future.set_result(True)
+                break
+            except Exception as e:
+                yield tornado.gen.sleep(1)  # TODO: backoff
+                #self._connecting_future.set_exception(e)
 
     def __del__(self):
         self.close()
@@ -212,6 +237,7 @@ class IPCClient(object):
         Sockets and filehandles should be closed explicitely, to prevent
         leaks.
         '''
+        self._closing = True
         if hasattr(self, 'stream'):
             self.stream.close()
 

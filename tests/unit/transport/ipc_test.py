@@ -63,9 +63,11 @@ class BaseIPCReqCase(tornado.testing.AsyncTestCase):
         if len(failures) > 0:
             raise Exception('FDs still attached to the IOLoop: {0}'.format(failures))
 
-    def _handle_payload(self, payload):
+    @tornado.gen.coroutine
+    def _handle_payload(self, payload, reply_func):
         self.payloads.append(payload)
-        if payload.get('stop'):
+        yield reply_func(payload)
+        if isinstance(payload, dict) and payload.get('stop'):
             self.stop()
 
 class ClearReqTestCases(BaseIPCReqCase):
