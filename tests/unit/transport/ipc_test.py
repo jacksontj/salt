@@ -41,6 +41,7 @@ class BaseIPCReqCase(tornado.testing.AsyncTestCase):
     '''
     def setUp(self):
         super(BaseIPCReqCase, self).setUp()
+        self._start_handlers = dict(self.io_loop._handlers)
         self.socket_path = os.path.join(integration.TMP, 'ipc_test.ipc')
 
         self.server_channel = salt.transport.ipc.IPCMessageServer(
@@ -56,6 +57,11 @@ class BaseIPCReqCase(tornado.testing.AsyncTestCase):
         super(BaseIPCReqCase, self).tearDown()
         self.server_channel.close()
         os.unlink(self.socket_path)
+        for k, v in self.io_loop._handlers.iteritems():
+            if self._start_handlers.get(k) != v:
+                failures.append((k, v))
+        if len(failures) > 0:
+            raise Exception('FDs still attached to the IOLoop: {0}'.format(failures))
 
     def _handle_payload(self, payload):
         self.payloads.append(payload)
@@ -66,14 +72,19 @@ class ClearReqTestCases(BaseIPCReqCase):
     '''
     Test all of the clear msg stuff
     '''
-    def setUp(self):
-        super(ClearReqTestCases, self).setUp()
-        self.channel = salt.transport.ipc.IPCMessageClient(
+
+    def _get_channel(self):
+        channel = salt.transport.ipc.IPCMessageClient(
             socket_path=self.socket_path,
             io_loop=self.io_loop,
         )
-        self.channel.connect(callback=self.stop)
+        channel.connect(callback=self.stop)
         self.wait()
+        return channel
+
+    def setUp(self):
+        super(ClearReqTestCases, self).setUp()
+        self.channel = self._get_channel()
 
     def tearDown(self):
         super(ClearReqTestCases, self).setUp()
@@ -104,6 +115,29 @@ class ClearReqTestCases(BaseIPCReqCase):
         self.channel.send(msg)
         self.wait()
         self.assertEqual(msg, self.payloads[0])
+
+    def test_multistream_sends(self):
+        local_channel = self._get_channel()
+
+        for c in (self.channel, local_channel):
+            c.send('foo')
+
+        self.channel.send({'stop': True})
+        self.wait()
+        self.assertEqual(self.payloads[:-1], ['foo', 'foo'])
+
+    def test_multistream_errors(self):
+        local_channel = self._get_channel()
+
+        for c in (self.channel, local_channel):
+            c.send(None)
+
+        for c in (self.channel, local_channel):
+            c.send('foo')
+
+        self.channel.send({'stop': True})
+        self.wait()
+        self.assertEqual(self.payloads[:-1], [None, None, 'foo', 'foo'])
 
 
 if __name__ == '__main__':
