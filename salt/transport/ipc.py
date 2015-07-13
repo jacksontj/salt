@@ -190,7 +190,6 @@ class IPCClient(object):
         return future
 
 
-    # TODO: single connect for multiple callers (similar to auth)
     @tornado.gen.coroutine
     def _connect(self):
         '''
