@@ -1259,7 +1259,6 @@ class AESFuncs(object):
         load['grains']['id'] = load['id']
 
         pillar_dirs = {}
-#        pillar = salt.pillar.Pillar(
         pillar = salt.pillar.get_pillar(
             self.opts,
             load['grains'],
