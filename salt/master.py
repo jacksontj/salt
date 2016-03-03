@@ -830,6 +830,11 @@ class MWorker(SignalHandlingMultiprocessingProcess):
         load = payload['load']
         ret = {'aes': self._handle_aes,
                'clear': self._handle_clear}[key](load)
+        # if we got a future, we must wait on it
+        if isinstance(ret[0], tornado.concurrent.Future):
+            b = yield ret[0]
+            # create the return upstream expects
+            ret = (b, ret[1])
         raise tornado.gen.Return(ret)
 
     def _handle_clear(self, load):
