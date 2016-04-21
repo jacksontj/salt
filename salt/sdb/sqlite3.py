@@ -134,6 +134,7 @@ def get(key, profile=None):
     '''
     Get a value from sqlite3
     '''
+    print 'do a get!!', key, profile
     if not profile:
         return None
     _, cur, table = _connect(profile)

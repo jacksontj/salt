@@ -13,6 +13,12 @@ __func_alias__ = {
     'set_': 'set',
 }
 
+CACHE_KEY = 'sdb_cache'
+
+def __virtual__():
+    if CACHE_KEY not in __context__:
+        __context__[CACHE_KEY] = {}
+    return True
 
 def get(uri):
     '''
@@ -25,7 +31,10 @@ def get(uri):
 
         salt '*' sdb.get sdb://mymemcached/foo
     '''
-    return salt.utils.sdb.sdb_get(uri, __opts__)
+    print 'cache', __context__[CACHE_KEY]
+    if uri not in __context__[CACHE_KEY]:
+        __context__[CACHE_KEY][uri] = salt.utils.sdb.sdb_get(uri, __opts__)
+    return __context__[CACHE_KEY][uri]
 
 
 def set_(uri, value):
