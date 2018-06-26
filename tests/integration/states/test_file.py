@@ -662,56 +662,47 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
             self.assertIn(
                 'does not exist', ret['comment'])
 
-    def test_managed_source_hash_indifferent_case(self):
+    def test_managed_unicode_jinja_with_tojson_filter(self):
         '''
-        Test passing a source_hash as an uppercase hash.
+        Using {{ varname }} with a list or dictionary which contains unicode
+        types on Python 2 will result in Jinja rendering the "u" prefix on each
+        string. This tests that using the "tojson" jinja filter will dump them
+        to a format which can be successfully loaded by our YAML loader.
 
-        This is a regression test for Issue #38914 and Issue #48230 (test=true use).
+        The two lines that should end up being rendered are meant to test two
+        issues that would trip up PyYAML if the "tojson" filter were not used:
+
+        1. A unicode string type would be loaded as a unicode literal with the
+           leading "u" as well as the quotes, rather than simply being loaded
+           as the proper unicode type which matches the content of the string
+           literal. In other wordss, u'foo' would be loaded literally as
+           u"u'foo'". This test includes actual non-ascii unicode in one of the
+           strings to confirm that this also handles these international
+           characters properly.
+
+        2. Any unicode string type (such as a URL) which contains a colon would
+           cause a ScannerError in PyYAML, as it would be assumed to delimit a
+           mapping node.
+
+        Dumping the data structure to JSON using the "tojson" jinja filter
+        should produce an inline data structure which is valid YAML and will be
+        loaded properly by our YAML loader.
         '''
-        name = os.path.join(TMP, 'source_hash_indifferent_case')
-        state_name = 'file_|-{0}_|' \
-                     '-{0}_|-managed'.format(name)
-        local_path = os.path.join(FILES, 'file', 'base', 'hello_world.txt')
-        actual_hash = 'c98c24b677eff44860afea6f493bbaec5bb1c4cbb209c6fc2bbb47f66ff2ad31'
-        uppercase_hash = actual_hash.upper()
+        test_file = os.path.join(TMP, 'test-tojson.txt')
+        ret = self.run_function(
+            'state.apply',
+            mods='tojson',
+            pillar={'tojson-file': test_file})
+        ret = ret[next(iter(ret))]
+        assert ret['result'], ret
+        with salt.utils.files.fopen(test_file) as fp_:
+            managed = salt.utils.stringutils.to_unicode(fp_.read())
+        expected = textwrap.dedent('''\
+            Zucker ist süß.
+            Webseite ist https://saltstack.com.
 
-        try:
-            # Lay down tmp file to test against
-            self.run_state(
-                'file.managed',
-                name=name,
-                source=local_path,
-                source_hash=actual_hash
-            )
-
-            # Test uppercase source_hash: should return True with no changes
-            ret = self.run_state(
-                'file.managed',
-                name=name,
-                source=local_path,
-                source_hash=uppercase_hash
-            )
-            assert ret[state_name]['result'] is True
-            assert ret[state_name]['pchanges'] == {}
-            assert ret[state_name]['changes'] == {}
-
-            # Test uppercase source_hash using test=true
-            # Should return True with no changes
-            ret = self.run_state(
-                'file.managed',
-                name=name,
-                source=local_path,
-                source_hash=uppercase_hash,
-                test=True
-            )
-            assert ret[state_name]['result'] is True
-            assert ret[state_name]['pchanges'] == {}
-            assert ret[state_name]['changes'] == {}
-
-        finally:
-            # Clean Up File
-            if os.path.exists(name):
-                os.remove(name)
+            ''')
+        assert managed == expected, '{0!r} != {1!r}'.format(managed, expected)
 
     def test_directory(self):
         '''
