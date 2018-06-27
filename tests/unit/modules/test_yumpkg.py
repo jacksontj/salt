@@ -601,3 +601,116 @@ class YumTestCase(TestCase, LoaderModuleMockMixin):
                      '--branch=foo', '--exclude=kernel*', 'upgrade'],
                     output_loglevel='trace',
                     python_shell=False)
+
+    def test_info_installed_with_all_versions(self):
+        '''
+        Test the return information of all versions for the named package(s), installed on the system.
+
+        :return:
+        '''
+        run_out = {
+            'virgo-dummy': [
+                {'build_date': '2015-07-09T10:55:19Z',
+                 'vendor': 'openSUSE Build Service',
+                 'description': 'This is the Virgo dummy package used for testing SUSE Manager',
+                 'license': 'GPL-2.0', 'build_host': 'sheep05', 'url': 'http://www.suse.com',
+                 'build_date_time_t': 1436432119, 'relocations': '(not relocatable)',
+                 'source_rpm': 'virgo-dummy-1.0-1.1.src.rpm', 'install_date': '2016-02-23T16:31:57Z',
+                 'install_date_time_t': 1456241517, 'summary': 'Virgo dummy package', 'version': '1.0',
+                 'signature': 'DSA/SHA1, Thu Jul  9 08:55:33 2015, Key ID 27fa41bd8a7c64f9',
+                 'release': '1.1', 'group': 'Applications/System', 'arch': 'i686', 'size': '17992'},
+                {'build_date': '2015-07-09T10:15:19Z',
+                 'vendor': 'openSUSE Build Service',
+                 'description': 'This is the Virgo dummy package used for testing SUSE Manager',
+                 'license': 'GPL-2.0', 'build_host': 'sheep05', 'url': 'http://www.suse.com',
+                 'build_date_time_t': 1436432119, 'relocations': '(not relocatable)',
+                 'source_rpm': 'virgo-dummy-1.0-1.1.src.rpm', 'install_date': '2016-02-23T16:31:57Z',
+                 'install_date_time_t': 14562415127, 'summary': 'Virgo dummy package', 'version': '1.0',
+                 'signature': 'DSA/SHA1, Thu Jul  9 08:55:33 2015, Key ID 27fa41bd8a7c64f9',
+                 'release': '1.1', 'group': 'Applications/System', 'arch': 'x86_64', 'size': '13124'}
+            ],
+            'libopenssl1_0_0': [
+                {'build_date': '2015-11-04T23:20:34Z', 'vendor': 'SUSE LLC <https://www.suse.com/>',
+                 'description': 'The OpenSSL Project is a collaborative effort.',
+                 'license': 'OpenSSL', 'build_host': 'sheep11', 'url': 'https://www.openssl.org/',
+                 'build_date_time_t': 1446675634, 'relocations': '(not relocatable)',
+                 'source_rpm': 'openssl-1.0.1i-34.1.src.rpm', 'install_date': '2016-02-23T16:31:35Z',
+                 'install_date_time_t': 1456241495, 'summary': 'Secure Sockets and Transport Layer Security',
+                 'version': '1.0.1i', 'signature': 'RSA/SHA256, Wed Nov  4 22:21:34 2015, Key ID 70af9e8139db7c82',
+                 'release': '34.1', 'group': 'Productivity/Networking/Security', 'packager': 'https://www.suse.com/',
+                 'arch': 'x86_64', 'size': '2576912'}
+            ]
+        }
+        with patch.dict(yumpkg.__salt__, {'lowpkg.info': MagicMock(return_value=run_out)}):
+            installed = yumpkg.info_installed(all_versions=True)
+            # Test overall products length
+            self.assertEqual(len(installed), 2)
+
+            # Test multiple versions for the same package
+            for pkg_name, pkg_info_list in installed.items():
+                self.assertEqual(len(pkg_info_list), 2 if pkg_name == "virgo-dummy" else 1)
+                for info in pkg_info_list:
+                    self.assertTrue(info['arch'] in ('x86_64', 'i686'))
+
+    @skipIf(not yumpkg.HAS_YUM, 'Could not import yum')
+    def test_yum_base_error(self):
+        with patch('yum.YumBase') as mock_yum_yumbase:
+            mock_yum_yumbase.side_effect = CommandExecutionError
+            with pytest.raises(CommandExecutionError):
+                yumpkg._get_yum_config()
+
+
+@skipIf(pytest is None, 'PyTest is missing')
+class YumUtilsTestCase(TestCase, LoaderModuleMockMixin):
+    '''
+    Yum/Dnf utils tests.
+    '''
+    def setup_loader_modules(self):
+        return {
+            yumpkg: {
+                '__context__': {
+                    'yum_bin': 'fake-yum',
+                },
+                '__grains__': {
+                    'osarch': 'x86_64',
+                    'os_family': 'RedHat',
+                    'osmajorrelease': 7,
+                },
+            }
+        }
+
+    def test_call_yum_default(self):
+        '''
+        Call default Yum/Dnf.
+        :return:
+        '''
+        with patch.dict(yumpkg.__salt__, {'cmd.run_all': MagicMock(), 'config.get': MagicMock(return_value=False)}):
+            yumpkg._call_yum(['-y', '--do-something'])  # pylint: disable=W0106
+            yumpkg.__salt__['cmd.run_all'].assert_called_once_with(
+                ['fake-yum', '-y', '--do-something'], env={},
+                output_loglevel='trace', python_shell=False)
+
+    @patch('salt.utils.systemd.has_scope', MagicMock(return_value=True))
+    def test_call_yum_in_scope(self):
+        '''
+        Call Yum/Dnf within the scope.
+        :return:
+        '''
+        with patch.dict(yumpkg.__salt__, {'cmd.run_all': MagicMock(), 'config.get': MagicMock(return_value=True)}):
+            yumpkg._call_yum(['-y', '--do-something'])  # pylint: disable=W0106
+            yumpkg.__salt__['cmd.run_all'].assert_called_once_with(
+                ['systemd-run', '--scope', 'fake-yum', '-y', '--do-something'], env={},
+                output_loglevel='trace', python_shell=False)
+
+    def test_call_yum_with_kwargs(self):
+        '''
+        Call Yum/Dnf with the optinal keyword arguments.
+        :return:
+        '''
+        with patch.dict(yumpkg.__salt__, {'cmd.run_all': MagicMock(), 'config.get': MagicMock(return_value=False)}):
+            yumpkg._call_yum(['-y', '--do-something'],
+                             python_shell=True, output_loglevel='quiet', ignore_retcode=False,
+                             username='Darth Vader')  # pylint: disable=W0106
+            yumpkg.__salt__['cmd.run_all'].assert_called_once_with(
+                ['fake-yum', '-y', '--do-something'], env={}, ignore_retcode=False,
+                output_loglevel='quiet', python_shell=True, username='Darth Vader')
